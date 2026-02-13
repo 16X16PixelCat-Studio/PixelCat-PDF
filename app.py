@@ -1,8 +1,14 @@
+import sys
+import os
+
+# This fix handles the "Ordinal" and path errors in compiled EXEs
+if getattr(sys, 'frozen', False):
+    os.environ['PATH'] = sys._MEIPASS + os.pathsep + os.environ['PATH']
+
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pixelcat_engine import PixelCatEngine
 from PIL import Image
-import os
 import threading
 
 VERSION = "v0.1.0-alpha"
