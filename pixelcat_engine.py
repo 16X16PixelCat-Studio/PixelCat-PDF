@@ -40,7 +40,6 @@ class PixelCatEngine:
         return "Range saved!"
 
     def merge_pdfs(self, file_list, output_path):
-        """FIXED: Loops through every page of every selected file."""
         writer = PdfWriter()
         total = 0
         for file in file_list:
