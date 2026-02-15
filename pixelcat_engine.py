@@ -25,6 +25,15 @@ class PixelCatEngine:
         doc.close()
         return tk_img
 
+    def get_page_text(self, pdf_path, page_num):
+        try:
+            doc = fitz.open(pdf_path)
+            text = doc[page_num].get_text()
+            doc.close()
+            return text
+        except Exception:
+            return ""
+
     def get_all_text(self, pdf_path):
         try:
             doc = fitz.open(pdf_path)
