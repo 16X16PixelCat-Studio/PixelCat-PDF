@@ -1,331 +1,290 @@
 import sys
 import os
-import ctypes
-import threading
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QLabel, QScrollArea,
+                             QTextEdit, QFileDialog, QFrame, QSplitter,
+                             QStackedWidget, QDialog, QGridLayout, QSlider, QLineEdit, QListWidget)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
+from PyQt6.QtGui import QPixmap, QPalette, QColor, QIcon, QFont
 from pixelcat_engine import PixelCatEngine
 
-try:
-    myappid = 'pixelcat.pdf.alpha.v3'
-    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-except Exception:
-    pass
-
-VERSION = "v0.3.0"
-ctk.set_appearance_mode("dark")
+# Official Branding
+APP_NAME = "PixelCat-PDF-V0.4.0-ALPHA"
 
 
-class PixelCatPDF(ctk.CTk):
+class RenderThread(QThread):
+    page_rendered = pyqtSignal(int, object)
+
+    def __init__(self, engine, path, total_pages, zoom):
+        super().__init__()
+        self.engine, self.path, self.total_pages, self.zoom = engine, path, total_pages, zoom
+
+    def run(self):
+        for i in range(self.total_pages):
+            pix = self.engine.get_page_pixmap(self.path, i, zoom=self.zoom)
+            self.page_rendered.emit(i, pix)
+
+
+class PixelCatPDF(QMainWindow):
     def __init__(self):
         super().__init__()
         self.engine = PixelCatEngine()
-        self.title(f"PixelCat-PDF | {VERSION}")
-        self.geometry("1200x850")
-        self.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        self.base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        self.icons_path = os.path.join(self.base_path, "icons")
-
-        self.icon_tk = None
-        self.settings_icon_tk = None
-        self.load_main_icon()
-
+        self.settings_manager = QSettings("PixelCat", "PDF-App")
         self.current_pdf = None
-        self.merge_queue = []
-        self.organize_data = []
-        self.settings_window = None
+        self.nav_buttons = []
+        self.merge_files = []
 
-        # Increased initial scroll sensitivity
-        self.scroll_speed = 5
+        # PyInstaller Compatibility Logic
+        if getattr(sys, 'frozen', False):
+            self.base_path = sys._MEIPASS
+        else:
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
 
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.icons_path = os.path.join(self.base_path, "icons")
+        self.zoom_level = float(self.settings_manager.value("zoom", 0.8))
 
-        self.setup_sidebar()
-        self.setup_main_view()
-        self.show_home()
+        self.setWindowTitle(APP_NAME)
+        self.resize(1200, 850)
 
-    def load_main_icon(self):
-        try:
-            img_path = os.path.join(self.icons_path, "PixelCat-PDF.png")
-            if os.path.exists(img_path):
-                self.icon_tk = ImageTk.PhotoImage(Image.open(img_path))
-                self.after(200, lambda: self.wm_iconphoto(False, self.icon_tk))
-        except Exception:
-            pass
+        # Icon Logic
+        self.main_icon = self.get_icon("PixelCat-PDF.png")
+        self.setWindowIcon(self.main_icon)
 
-    def setup_sidebar(self):
-        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkLabel(self.sidebar, text="🐈 PixelCat", font=("Arial", 24, "bold")).pack(pady=20)
-        ctk.CTkButton(self.sidebar, text="📂 Open PDF", command=self.open_file, fg_color="#3498db").pack(fill="x",
-                                                                                                        padx=20,
-                                                                                                        pady=10)
+        self.set_dark_theme()
+        self.setup_ui()
+        self.set_active_button(0)
 
-        self.nav_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        self.nav_frame.pack(fill="x", padx=10, pady=10)
+    def set_dark_theme(self):
+        app = QApplication.instance()
+        app.setStyle("Fusion")
+        app.setFont(QFont("Segoe UI", 10))
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(18, 18, 18))
+        palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+        palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
+        palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+        app.setPalette(palette)
+
+    def get_icon(self, name):
+        path = os.path.join(self.icons_path, name)
+        return QIcon(path) if os.path.exists(path) else QIcon()
+
+    def setup_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        self.main_layout = QHBoxLayout(central)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Sidebar Area
+        self.sidebar = QFrame()
+        self.sidebar.setFixedWidth(200)
+        self.sidebar.setStyleSheet("background-color: #252525; border-right: 1px solid #333;")
+        side_layout = QVBoxLayout(self.sidebar)
+
+        title = QLabel("PixelCat")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #3498db; margin: 10px;")
+        side_layout.addWidget(title)
+
+        btn_open = QPushButton(" Open PDF")
+        btn_open.setIcon(self.get_icon("open.png"))
+        btn_open.setFixedHeight(45)
+        btn_open.setStyleSheet("background-color: #3498db; font-weight: bold; border-radius: 5px;")
+        btn_open.clicked.connect(self.open_file)
+        side_layout.addWidget(btn_open)
 
         nav_items = [
-            ("🏠 Viewer", self.show_home),
-            ("📑 Organizer", self.show_organizer),
-            ("✂️ Splitter", self.show_splitter),
-            ("🔗 Merger", self.show_merger),
-            ("🔒 Security", self.show_security)
+            ("Viewer", 0, "view.png"),
+            ("Organizer", 1, "org.png"),
+            ("Splitter", 2, "split.png"),
+            ("Merger", 3, "merge.png"),
+            ("Security", 4, "lock.png")
         ]
 
-        for name, cmd in nav_items:
-            ctk.CTkButton(self.nav_frame, text=name, anchor="w", command=cmd).pack(fill="x", pady=2)
+        for name, idx, icon_name in nav_items:
+            btn = QPushButton(f" {name}")
+            btn.setIcon(self.get_icon(icon_name))
+            btn.setFixedHeight(45)
+            btn.setProperty("idx", idx)
+            btn.clicked.connect(lambda checked, i=idx: self.set_active_button(i))
+            side_layout.addWidget(btn)
+            self.nav_buttons.append(btn)
 
-        ctk.CTkButton(self.nav_frame, text="⚙️ Settings", anchor="w", command=self.open_settings).pack(fill="x",
-                                                                                                       pady=(20, 2))
+        side_layout.addStretch()
 
-        self.copy_btn = ctk.CTkButton(self.sidebar, text="📋 Copy All Text", command=self.copy_text_to_clipboard,
-                                      fg_color="#8e44ad")
-        self.copy_btn.pack(side="bottom", pady=10, padx=20)
+        btn_settings = QPushButton(" Settings")
+        btn_settings.setIcon(self.get_icon("settings.png"))
+        btn_settings.setFixedHeight(45)
+        btn_settings.setStyleSheet("text-align: left; padding-left: 10px; border: none; background: transparent;")
+        btn_settings.clicked.connect(self.open_settings)
+        side_layout.addWidget(btn_settings)
 
-    def setup_main_view(self):
-        self.main_view = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_view.grid(row=0, column=1, sticky="nsew")
+        self.main_layout.addWidget(self.sidebar)
 
-        self.home_screen = ctk.CTkFrame(self.main_view, fg_color="transparent")
+        # Content Stack
+        self.stack = QStackedWidget()
+        self.main_layout.addWidget(self.stack)
 
-        self.pdf_scroll = ctk.CTkScrollableFrame(self.home_screen, fg_color="#121212")
-        self.pdf_scroll.pack(side="left", fill="both", expand=True, padx=(5, 2), pady=5)
+        self.setup_viewer_screen()  # 0
+        self.setup_organizer_screen()  # 1
+        self.setup_splitter_screen()  # 2
+        self.setup_merger_screen()  # 3
+        self.setup_security_screen()  # 4
 
-        # Bind scrolling to our high-speed logic
-        self.pdf_scroll.bind_all("<MouseWheel>", self._on_mousewheel)
+    def set_active_button(self, index):
+        self.stack.setCurrentIndex(index)
+        active = "text-align: left; padding-left: 10px; border: none; background-color: #3498db; border-radius: 4px; font-weight: bold;"
+        idle = "text-align: left; padding-left: 10px; border: none; background-color: transparent;"
+        for btn in self.nav_buttons:
+            btn.setStyleSheet(active if btn.property("idx") == index else idle)
 
-        self.text_inspector_frame = ctk.CTkFrame(self.home_screen, width=350)
-        self.text_inspector_frame.pack(side="right", fill="y", padx=(2, 5), pady=5)
-        ctk.CTkLabel(self.text_inspector_frame, text="Text Inspector", font=("Arial", 12, "bold")).pack(pady=5)
-        self.text_inspector = ctk.CTkTextbox(self.text_inspector_frame, width=340, activate_scrollbars=True)
-        self.text_inspector.pack(fill="both", expand=True, padx=5, pady=5)
-        self.text_inspector.insert("0.0", "Select a page to extract text...")
+    def setup_viewer_screen(self):
+        page = QWidget();
+        lay = QHBoxLayout(page)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.scroll_area = QScrollArea()
+        self.scroll_widget = QWidget();
+        self.viewer_layout = QVBoxLayout(self.scroll_widget)
+        self.scroll_area.setWidget(self.scroll_widget);
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("background-color: #121212; border: none;")
+        self.inspector = QTextEdit();
+        self.inspector.setReadOnly(True)
+        self.inspector.setFont(QFont("Consolas", 11))
+        self.splitter.addWidget(self.scroll_area);
+        self.splitter.addWidget(self.inspector)
+        self.splitter.setSizes([850, 350])
+        lay.addWidget(self.splitter)
+        self.stack.addWidget(page)
 
-        self.organizer_screen = self.create_tool_screen("Page Organizer")
-        self.org_controls = ctk.CTkFrame(self.organizer_screen, fg_color="transparent")
-        self.org_controls.pack(fill="x", padx=20)
-        ctk.CTkButton(self.org_controls, text="🗑️ Delete Selected", fg_color="#e74c3c", command=self.bulk_delete,
-                      width=150).pack(side="left", padx=5)
-        ctk.CTkButton(self.org_controls, text="🔄 Rotate Selected", fg_color="#f39c12", command=self.bulk_rotate,
-                      width=150).pack(side="left", padx=5)
-        ctk.CTkButton(self.org_controls, text="💾 Save Changes", fg_color="#27ae60", command=self.do_organize_save,
-                      width=150).pack(side="right", padx=5)
-        self.org_grid = ctk.CTkScrollableFrame(self.organizer_screen, fg_color="#1a1a1a", height=600)
-        self.org_grid.pack(fill="both", expand=True, padx=20, pady=10)
+    def setup_organizer_screen(self):
+        page = QWidget();
+        lay = QVBoxLayout(page)
+        self.org_scroll = QScrollArea()
+        self.org_content = QWidget();
+        self.org_grid = QGridLayout(self.org_content)
+        self.org_grid.setSpacing(20)
+        self.org_scroll.setWidget(self.org_content);
+        self.org_scroll.setWidgetResizable(True)
+        self.org_scroll.setStyleSheet("background-color: #121212; border: none;")
+        lay.addWidget(self.org_scroll)
+        self.stack.addWidget(page)
 
-        self.split_screen = self.create_tool_screen("Splitter")
-        self.merge_screen = self.create_tool_screen("Merger")
-        self.lock_screen = self.create_tool_screen("Security")
+    def setup_splitter_screen(self):
+        page = QWidget();
+        lay = QVBoxLayout(page);
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(QLabel("Split PDF by Range"), alignment=Qt.AlignmentFlag.AlignCenter)
+        self.split_start = QLineEdit();
+        self.split_start.setPlaceholderText("Start Page");
+        self.split_start.setFixedWidth(200)
+        self.split_end = QLineEdit();
+        self.split_end.setPlaceholderText("End Page");
+        self.split_end.setFixedWidth(200)
+        btn = QPushButton("Extract Pages");
+        btn.setFixedWidth(200);
+        btn.setStyleSheet("background-color: #3498db;")
+        lay.addWidget(self.split_start);
+        lay.addWidget(self.split_end);
+        lay.addWidget(btn)
+        self.stack.addWidget(page)
 
-        self.start_ent = ctk.CTkEntry(self.split_screen, placeholder_text="Start");
-        self.start_ent.pack(pady=5)
-        self.end_ent = ctk.CTkEntry(self.split_screen, placeholder_text="End");
-        self.end_ent.pack(pady=5)
-        ctk.CTkButton(self.split_screen, text="Run Split", command=self.do_range).pack(pady=10)
+    def setup_merger_screen(self):
+        page = QWidget();
+        lay = QVBoxLayout(page)
+        self.merge_list = QListWidget()
+        btn_add = QPushButton("Add PDF to Merge")
+        btn_add.clicked.connect(self.add_merge_file)
+        btn_run = QPushButton("Merge Files")
+        btn_run.setStyleSheet("background-color: #27ae60;")
+        lay.addWidget(QLabel("Merge Queue:"))
+        lay.addWidget(self.merge_list);
+        lay.addWidget(btn_add);
+        lay.addWidget(btn_run)
+        self.stack.addWidget(page)
 
-        m_btns = ctk.CTkFrame(self.merge_screen, fg_color="transparent")
-        m_btns.pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(m_btns, text="+ Add", command=self.add_to_merge_queue, fg_color="#27ae60").pack(side="left",
-                                                                                                      padx=5)
-        ctk.CTkButton(m_btns, text="Merge", command=self.do_merge, fg_color="#3498db").pack(side="right", padx=5)
-        self.queue_frame = ctk.CTkScrollableFrame(self.merge_screen, fg_color="#1a1a1a", height=400)
-        self.queue_frame.pack(fill="both", expand=True, padx=20, pady=10)
+    def setup_security_screen(self):
+        page = QWidget();
+        lay = QVBoxLayout(page);
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(QLabel("Password Protection"), alignment=Qt.AlignmentFlag.AlignCenter)
+        self.pass_in = QLineEdit();
+        self.pass_in.setPlaceholderText("Enter Password");
+        self.pass_in.setEchoMode(QLineEdit.EchoMode.Password);
+        self.pass_in.setFixedWidth(250)
+        btn = QPushButton("Encrypt PDF");
+        btn.setFixedWidth(250);
+        btn.setStyleSheet("background-color: #e74c3c;")
+        lay.addWidget(self.pass_in);
+        lay.addWidget(btn)
+        self.stack.addWidget(page)
 
-        self.pass_ent = ctk.CTkEntry(self.lock_screen, placeholder_text="Password", show="*");
-        self.pass_ent.pack(pady=10)
-        ctk.CTkButton(self.lock_screen, text="Lock PDF", command=self.do_lock).pack()
+    def add_merge_file(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")
+        if f:
+            self.merge_files.append(f)
+            self.merge_list.addItem(os.path.basename(f))
 
-    def _on_mousewheel(self, event):
-        """High-speed scroll logic"""
-        # units determines the distance per wheel notch. Increased by factor of 2.
-        self.pdf_scroll._parent_canvas.yview_scroll(int(-2 * (event.delta / 120) * self.scroll_speed), "units")
+    def open_file(self, auto_path=None):
+        path = auto_path if auto_path else QFileDialog.getOpenFileName(self, "Open PDF", "", "PDF Files (*.pdf)")[0]
+        if path:
+            self.current_pdf = path
+            for i in reversed(range(self.viewer_layout.count())):
+                if self.viewer_layout.itemAt(i).widget(): self.viewer_layout.itemAt(i).widget().setParent(None)
+            for i in reversed(range(self.org_grid.count())):
+                if self.org_grid.itemAt(i).widget(): self.org_grid.itemAt(i).widget().setParent(None)
 
-    def create_tool_screen(self, title):
-        frame = ctk.CTkFrame(self.main_view, fg_color="transparent")
-        ctk.CTkLabel(frame, text=title, font=("Arial", 30, "bold")).pack(pady=10)
-        return frame
+            pages = self.engine.get_info(path)["Pages"]
+            self.render_thread = RenderThread(self.engine, path, pages, self.zoom_level)
+            self.render_thread.page_rendered.connect(self.add_page_to_ui)
+            self.render_thread.start()
+            self.set_active_button(0)
+
+    def add_page_to_ui(self, index, pixmap):
+        v_lbl = QLabel()
+        v_lbl.setPixmap(pixmap.scaledToWidth(800, Qt.TransformationMode.SmoothTransformation))
+        v_lbl.mousePressEvent = lambda e, p=index: self.show_text(p)
+        self.viewer_layout.addWidget(v_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        t_frame = QFrame();
+        t_lay = QVBoxLayout(t_frame)
+        t_lbl = QLabel();
+        t_lbl.setPixmap(
+            pixmap.scaled(180, 240, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        t_lbl.setStyleSheet("border: 2px solid #333; border-radius: 5px;")
+        t_lay.addWidget(t_lbl);
+        t_lay.addWidget(QLabel(f"Page {index + 1}"), alignment=Qt.AlignmentFlag.AlignCenter)
+        self.org_grid.addWidget(t_frame, divmod(index, 4)[0], divmod(index, 4)[1])
+
+    def show_text(self, page_num):
+        text = self.engine.get_page_text(self.current_pdf, page_num)
+        self.inspector.setText(text if text.strip() else "[No Text Layer]")
 
     def open_settings(self):
-        if self.settings_window is None or not self.settings_window.winfo_exists():
-            self.settings_window = ctk.CTkToplevel(self)
-            self.settings_window.title("Settings")
-            self.settings_window.geometry("450x400")
-            self.settings_window.attributes("-topmost", True)
+        dialog = QDialog(self);
+        dialog.setWindowTitle("Settings");
+        dialog.setWindowIcon(self.get_icon("settings.png"))
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Zoom Quality"))
+        slider = QSlider(Qt.Orientation.Horizontal);
+        slider.setRange(5, 20);
+        slider.setValue(int(self.zoom_level * 10))
+        layout.addWidget(slider)
+        btn = QPushButton("Apply");
+        btn.clicked.connect(lambda: self.save_prefs(slider.value() / 10, dialog))
+        layout.addWidget(btn);
+        dialog.exec()
 
-            try:
-                s_icon_path = os.path.join(self.icons_path, "settings.png")
-                if os.path.exists(s_icon_path):
-                    self.settings_icon_tk = ImageTk.PhotoImage(Image.open(s_icon_path))
-                    self.settings_window.after(200,
-                                               lambda: self.settings_window.wm_iconphoto(False, self.settings_icon_tk))
-            except:
-                pass
-
-            ctk.CTkLabel(self.settings_window, text="⚙️ Application Settings", font=("Arial", 20, "bold")).pack(pady=20)
-
-            self.mode_switch = ctk.CTkSwitch(self.settings_window, text="Dark Mode", command=self.toggle_mode)
-            self.mode_switch.pack(pady=10)
-            if ctk.get_appearance_mode() == "Dark": self.mode_switch.select()
-
-            ctk.CTkLabel(self.settings_window, text="Scroll Speed Sensitivity").pack(pady=(20, 0))
-            # Max speed bumped to 50
-            self.speed_slider = ctk.CTkSlider(self.settings_window, from_=1, to=50, command=self.update_scroll_speed)
-            self.speed_slider.set(self.scroll_speed)
-            self.speed_slider.pack(pady=10)
-
-            ctk.CTkButton(self.settings_window, text="Done", command=self.settings_window.destroy).pack(pady=30)
-        else:
-            self.settings_window.focus()
-
-    def toggle_mode(self):
-        mode = "dark" if self.mode_switch.get() else "light"
-        ctk.set_appearance_mode(mode)
-
-    def update_scroll_speed(self, value):
-        self.scroll_speed = int(value)
-
-    def switch(self, target):
-        for s in [self.home_screen, self.organizer_screen, self.split_screen, self.merge_screen, self.lock_screen]:
-            s.pack_forget()
-        target.pack(expand=True, fill="both")
-
-    def show_home(self):
-        self.switch(self.home_screen)
-
-    def show_organizer(self):
-        self.switch(self.organizer_screen)
-        if self.current_pdf: self.refresh_organizer_view()
-
-    def show_splitter(self):
-        self.switch(self.split_screen)
-
-    def show_merger(self):
-        self.switch(self.merge_screen)
-
-    def show_security(self):
-        self.switch(self.lock_screen)
-
-    def open_file(self):
-        f = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
-        if f and os.path.exists(f):
-            self.current_pdf = f
-            pages = self.engine.get_info(f)["Pages"]
-            self.organize_data = [{'rot': 0, 'deleted': False, 'selected': False} for _ in range(pages)]
-            self.render()
-
-    def render(self):
-        if self.current_pdf:
-            threading.Thread(target=self._threaded_render, daemon=True).start()
-
-    def _threaded_render(self):
-        try:
-            total = self.engine.get_info(self.current_pdf)["Pages"]
-            imgs = [self.engine.get_page_image(self.current_pdf, i, 1.2) for i in range(min(total, 15))]
-            self.after(0, self._update_ui, imgs)
-        except:
-            pass
-
-    def _update_ui(self, imgs):
-        for w in self.pdf_scroll.winfo_children(): w.destroy()
-        for i, img in enumerate(imgs):
-            lbl = ctk.CTkLabel(self.pdf_scroll, image=img, text="")
-            lbl.image = img
-            lbl.pack(pady=10)
-            lbl.bind("<Button-1>", lambda e, p=i: self.load_text_to_inspector(p))
-        self.load_text_to_inspector(0)
-
-    def load_text_to_inspector(self, page_num):
-        if self.current_pdf:
-            text = self.engine.get_page_text(self.current_pdf, page_num)
-            self.text_inspector.delete("0.0", "end")
-            self.text_inspector.insert("0.0", text if text.strip() else "[No text layer found]")
-
-    def refresh_organizer_view(self):
-        for w in self.org_grid.winfo_children(): w.destroy()
-        cols = 4
-        for i, data in enumerate(self.organize_data):
-            border = "#3498db" if data['selected'] else "#2b2b2b"
-            if data['deleted']: border = "#550000"
-            frame = ctk.CTkFrame(self.org_grid, fg_color="#2b2b2b", border_width=3, border_color=border)
-            frame.grid(row=i // cols, column=i % cols, padx=10, pady=10)
-            img = self.engine.get_page_image(self.current_pdf, i, zoom=0.2, rotation=data['rot'])
-            lbl = ctk.CTkLabel(frame, image=img, text="")
-            lbl.image = img
-            lbl.pack(padx=5, pady=5)
-            ctk.CTkLabel(frame, text=f"Page {i + 1}", font=("Arial", 10)).pack()
-            lbl.bind("<Button-1>", lambda e, idx=i: self.select_page(idx))
-
-    def select_page(self, idx):
-        self.organize_data[idx]['selected'] = not self.organize_data[idx]['selected']
-        self.refresh_organizer_view()
-
-    def bulk_delete(self):
-        for data in self.organize_data:
-            if data['selected']:
-                data['deleted'] = not data['deleted']
-                data['selected'] = False
-        self.refresh_organizer_view()
-
-    def bulk_rotate(self):
-        for data in self.organize_data:
-            if data['selected']:
-                data['rot'] = (data['rot'] + 90) % 360
-        self.refresh_organizer_view()
-
-    def do_organize_save(self):
-        if not self.current_pdf: return
-        out = filedialog.asksaveasfilename(defaultextension=".pdf")
-        if out:
-            configs = [{'source_idx': i, 'rotation': d['rot']} for i, d in enumerate(self.organize_data) if
-                       not d['deleted']]
-            msg = self.engine.save_organized_pdf(self.current_pdf, out, configs)
-            messagebox.showinfo("PixelCat", msg)
-
-    def add_to_merge_queue(self):
-        files = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
-        for f in files:
-            if f not in self.merge_queue: self.merge_queue.append(f)
-        self.refresh_queue_ui()
-
-    def refresh_queue_ui(self):
-        for w in self.queue_frame.winfo_children(): w.destroy()
-        for path in self.merge_queue:
-            row = ctk.CTkFrame(self.queue_frame, fg_color="#2b2b2b")
-            row.pack(fill="x", pady=2, padx=5)
-            ctk.CTkLabel(row, text=f"{os.path.basename(path)}").pack(side="left", padx=10)
-
-    def do_merge(self):
-        if not self.merge_queue: return
-        out = filedialog.asksaveasfilename(defaultextension=".pdf")
-        if out: messagebox.showinfo("PixelCat", self.engine.merge_pdfs(self.merge_queue, out))
-
-    def do_range(self):
-        if not self.current_pdf: return
-        out = filedialog.asksaveasfilename(defaultextension=".pdf")
-        if out: messagebox.showinfo("PixelCat",
-                                    self.engine.extract_range(self.current_pdf, out, int(self.start_ent.get()),
-                                                              int(self.end_ent.get())))
-
-    def do_lock(self):
-        if not self.current_pdf: return
-        out = filedialog.asksaveasfilename(defaultextension=".pdf")
-        if out: messagebox.showinfo("PixelCat", self.engine.protect_pdf(self.current_pdf, out, self.pass_ent.get()))
-
-    def copy_text_to_clipboard(self):
-        if not self.current_pdf: return
-        text = self.engine.get_all_text(self.current_pdf)
-        self.clipboard_clear();
-        self.clipboard_append(text);
-        self.update()
-        messagebox.showinfo("PixelCat", "Text copied!")
-
-    def on_closing(self):
-        self.destroy(); sys.exit()
+    def save_prefs(self, zoom, dialog):
+        self.zoom_level = zoom
+        self.settings_manager.setValue("zoom", zoom)
+        dialog.accept()
+        if self.current_pdf: self.open_file(auto_path=self.current_pdf)
 
 
 if __name__ == "__main__":
-    app = PixelCatPDF()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    window = PixelCatPDF()
+    window.show()
+    sys.exit(app.exec())
